@@ -1,0 +1,3 @@
+java -cp javacc.jar javacc JavaCompiler.jj
+javac *.java
+java JavaCompiler input.txt
