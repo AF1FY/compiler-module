@@ -2,7 +2,7 @@ options {
     STATIC = false;
     MULTI = true;       
     VISITOR = true;
-    NODE_DEFAULT_VOID = false;
+    NODE_DEFAULT_VOID = true; 
 }
 
 PARSER_BEGIN(JavaCompiler)
@@ -30,7 +30,9 @@ class SymbolEntry {
 
 public class JavaCompiler { 
     
-    public static Stack<Map<String, SymbolEntry>> scopeStack = new Stack<Map<String, SymbolEntry>>(); 
+    // Fix: Added space between > > to avoid '>>' operator conflict
+    // Fix: Explicit types instead of <>
+    public static Stack<Map<String, SymbolEntry> > scopeStack = new Stack<Map<String, SymbolEntry> >(); 
     public static SimpleNode astRoot = null;
 
     public static void initializeScope() {
@@ -47,7 +49,18 @@ public class JavaCompiler {
         return null;
     }
 
-    // --- Helper to Categorize Tokens (Phase 1 Output) ---
+    public static void checkUnusedForCurrentScope() {
+        if (scopeStack.isEmpty()) return;
+        Map<String, SymbolEntry> currentScope = scopeStack.peek();
+        for (Map.Entry<String, SymbolEntry> entry : currentScope.entrySet()) {
+            SymbolEntry symbol = entry.getValue();
+            String varName = entry.getKey();
+            if (symbol.usageCount == 0 && !varName.equals("args") && !varName.equals("this")) {
+                System.out.println("Warning: Variable '" + varName + "' (" + symbol.type + ") is declared but NEVER used.");
+            }
+        }
+    }
+
     public static String getCategory(int kind) {
         switch (kind) {
             case CLASS: case PUBLIC: case STATIC: case VOID: case MAIN:
@@ -65,13 +78,11 @@ public class JavaCompiler {
         }
     }
 
-    // --- Custom Pretty Printer for AST ---
     public static void printPrettyTree(SimpleNode node, String prefix, boolean isTail) {
         String nodeName = node.toString();
         String value = (node.jjtGetValue() != null) ? node.jjtGetValue().toString() : "";
         String details = "";
 
-        // Mapping internal names to your desired display names
         if (nodeName.equals("Start")) nodeName = "CompilationUnit";
         else if (nodeName.equals("ClassDeclaration")) {
             nodeName = "TypeDeclaration";
@@ -81,33 +92,19 @@ public class JavaCompiler {
             nodeName = "MethodDeclaration";
             details = "(name: main, modifiers: public static, return type: void)";
         }
-        else if (nodeName.equals("Block")) {
-            nodeName = "Block";
-            details = "";
-        }
         else if (nodeName.equals("VariableDeclaration")) {
             nodeName = "VariableDeclarationStatement";
             if (value.contains(":")) {
                 String[] parts = value.split(":");
                 details = "(type: " + parts[1] + ", name: " + parts[0] + ")";
-            } else {
-                 details = "(name: " + value + ")";
-            }
+            } else details = "(name: " + value + ")";
         }
         else if (nodeName.equals("Assignment")) {
-            nodeName = "ExpressionStatement"; // Assignment is an expression statement
+            nodeName = "ExpressionStatement"; 
             if (value.contains(":")) {
                  String[] parts = value.split(":");
                  details = "(Assignment: " + parts[0] + ")";
             }
-        }
-        else if (nodeName.equals("Expression")) {
-             nodeName = "InfixExpression";
-             details = value; 
-        }
-        else if (nodeName.equals("AdditiveExpression") || nodeName.equals("MultiplicativeExpression")) {
-            nodeName = "InfixExpression";
-            details = value; 
         }
         else if (nodeName.equals("Identifier")) {
             nodeName = "SimpleName";
@@ -120,21 +117,17 @@ public class JavaCompiler {
             else nodeName = "NumberLiteral";
             details = "(" + value + ")";
         }
-        else if (nodeName.equals("IfStatement")) {
-             nodeName = "IfStatement";
-        }
         else if (nodeName.equals("PrintStatement")) {
             nodeName = "ExpressionStatement";
             details = "[System.out.println]";
         }
-        else if (nodeName.equals("ReturnStatement")) {
-            nodeName = "ReturnStatement";
+        else if (nodeName.equals("Comparison") || nodeName.equals("AddOp") || nodeName.equals("MulOp")) {
+            nodeName = "InfixExpression";
+            details = value;
         }
 
-        // Print the node
         System.out.println(prefix + (isTail ? "└── " : "├── ") + nodeName + " " + details);
 
-        // Calculate prefix for children
         for (int i = 0; i < node.jjtGetNumChildren(); i++) {
             boolean isLast = (i == node.jjtGetNumChildren() - 1);
             printPrettyTree((SimpleNode) node.jjtGetChild(i), prefix + (isTail ? "    " : "│   "), isLast);
@@ -171,14 +164,14 @@ public class JavaCompiler {
             System.out.println("-----------------------------\n");
 
             // PHASE 2 & 3: Syntax & AST
-            System.out.println("--- Syntax & AST Check ---");
+            System.out.println("--- Syntax & Semantic Check ---");
             StringReader sr2 = new StringReader(content);
             JavaCompiler parser = new JavaCompiler(sr2); 
             initializeScope();
 
             try {
                 SimpleNode root = parser.Start(); 
-                System.out.println("✅ Syntax Validation Successful.");
+                System.out.println("Syntax Validation Successful.");
                 
                 if (root != null) {
                     System.out.println("\n--- Abstract Syntax Tree (AST) ---");
@@ -187,7 +180,7 @@ public class JavaCompiler {
                 }
 
             } catch (ParseException e) {
-                System.out.println("❌ Syntax Error: " + e.getMessage());
+                System.out.println("Syntax Error: " + e.getMessage());
             }
 
         } catch (Exception e) {
@@ -222,20 +215,20 @@ String Type() : { String typeName; }
     { return typeName; }
 }
 
-void Literal() : {}
+void Literal() #Literal : {}
 {
     <INTEGER_LITERAL> { jjtThis.jjtSetValue(token.image); }
   | <STRING_LITERAL> { jjtThis.jjtSetValue(token.image); }
   | <BOOLEAN_LITERAL> { jjtThis.jjtSetValue(token.image); }
 }
 
-SimpleNode Start() : {}
+SimpleNode Start() #Start : {}
 {
     ClassDeclaration() <EOF>
-    { return jjtThis; } // <--- هنا كان الخطأ، ضفت السطر ده عشان يرجع النود
+    { return jjtThis; }
 }
 
-void ClassDeclaration() : { Token t; }
+void ClassDeclaration() #ClassDeclaration : { Token t; }
 {
     <PUBLIC> <CLASS> t = <IDENTIFIER> 
     { 
@@ -243,10 +236,13 @@ void ClassDeclaration() : { Token t; }
         jjtThis.jjtSetValue(t.image);
     }
     <LBRACE> MainMethod() <RBRACE>
-    { scopeStack.pop(); }
+    { 
+        checkUnusedForCurrentScope();
+        scopeStack.pop(); 
+    }
 }
 
-void MainMethod() : { Token t; }
+void MainMethod() #MainMethod : { Token t; }
 {
     <PUBLIC> <STATIC> <VOID> <MAIN> 
     <LPAREN> <STRING> <LBRACKET> <RBRACKET> t = <IDENTIFIER> 
@@ -254,16 +250,23 @@ void MainMethod() : { Token t; }
         scopeStack.push(new HashMap<String, SymbolEntry>()); 
         scopeStack.peek().put(t.image, new SymbolEntry("String[]")); 
     }
-    <RPAREN> Block() { scopeStack.pop(); }
+    <RPAREN> Block() 
+    { 
+        checkUnusedForCurrentScope();
+        scopeStack.pop(); 
+    }
 }
 
-void Block() : {}
+void Block() #Block : {}
 {
     <LBRACE>
     { scopeStack.push(new HashMap<String, SymbolEntry>()); }
     ( Statement() )*
     <RBRACE>
-    { scopeStack.pop(); }
+    { 
+        checkUnusedForCurrentScope();
+        scopeStack.pop(); 
+    }
 }
 
 void Statement() : {}
@@ -278,7 +281,7 @@ void Statement() : {}
     | ReturnStatement() 
 }
 
-void VariableDeclaration() : { Token t; String varType; }
+void VariableDeclaration() #VariableDeclaration : { Token t; String varType; }
 {
     varType = Type()
     t = <IDENTIFIER>
@@ -290,7 +293,7 @@ void VariableDeclaration() : { Token t; String varType; }
     ( <ASSIGN> Expression() )?
 }
 
-void Assignment() : { Token t; SymbolEntry entry; }
+void Assignment() #Assignment : { Token t; SymbolEntry entry; }
 {
     t = <IDENTIFIER>
     {
@@ -301,23 +304,23 @@ void Assignment() : { Token t; SymbolEntry entry; }
     <ASSIGN> Expression()
 }
 
-void ReturnStatement() : {}
+void ReturnStatement() #ReturnStatement : {}
 {
     <RETURN> (Expression())? <SEMICOLON>
 }
 
-void IfStatement() : {}
+void IfStatement() #IfStatement : {}
 {
     <IF> <LPAREN> Expression() <RPAREN> Statement() 
     ( <ELSE> Statement() )?
 }
 
-void WhileStatement() : {}
+void WhileStatement() #WhileStatement : {}
 {
     <WHILE> <LPAREN> Expression() <RPAREN> Statement()
 }
 
-void ForStatement() : {}
+void ForStatement() #ForStatement : {}
 {
     <FOR> <LPAREN>
         ( VariableDeclaration() | Assignment() )? <SEMICOLON>
@@ -327,12 +330,12 @@ void ForStatement() : {}
     Statement()
 }
 
-void PrintStatement() : {}
+void PrintStatement() #PrintStatement : {}
 {
     <PRINT> <LPAREN> Expression() <RPAREN>
 }
 
-void Expression() : { Token op=null; }
+void Expression() #Comparison(>1) : { Token op=null; }
 {
     AdditiveExpression()
     ( 
@@ -342,7 +345,7 @@ void Expression() : { Token op=null; }
     )*
 }
 
-void AdditiveExpression() : { Token op=null; }
+void AdditiveExpression() #AddOp(>1) : { Token op=null; }
 {
     MultiplicativeExpression()
     ( 
@@ -352,7 +355,7 @@ void AdditiveExpression() : { Token op=null; }
     )*
 }
 
-void MultiplicativeExpression() : { Token op=null; }
+void MultiplicativeExpression() #MulOp(>1) : { Token op=null; }
 {
     PrimaryExpression()
     ( 
@@ -369,7 +372,7 @@ void PrimaryExpression() : {}
     | <LPAREN> Expression() <RPAREN> 
 }
 
-void Identifier() : {}
+void Identifier() #Identifier : {}
 {
     <IDENTIFIER>
     {
